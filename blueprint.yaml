@@ -13,12 +13,12 @@ blueprint:
 
   input:
 
-    # ─── Sensors ─────────────────────────────────────────────────────────────
+    # --- Sensors -----------------------------------------------------------------
 
     sensor_conso_reseau:
       name: "Instantaneous grid consumption"
       description: >
-        Power sensor in watts, signed — positive when importing from the grid,
+        Power sensor in watts, signed - positive when importing from the grid,
         negative when exporting. Can be a raw sensor or a sliding average
         (platform: statistics).
       selector:
@@ -30,7 +30,7 @@ blueprint:
       name: "Solar production"
       description: >
         Power sensor in watts for your instantaneous solar production.
-        Used only to detect nighttime (production < 10 W) — the automation
+        Used only to detect nighttime (production < 10 W) - the automation
         disables itself automatically when there is no sunlight.
       selector:
         entity:
@@ -46,7 +46,7 @@ blueprint:
         entity:
           domain: number
 
-    # ─── Custom conditions ───────────────────────────────────────────────────
+    # --- Custom conditions -------------------------------------------------------
 
     conditions:
       name: "Activation conditions"
@@ -59,7 +59,7 @@ blueprint:
       selector:
         condition:
 
-    # ─── Regulation parameters ────────────────────────────────────────────────
+    # --- Regulation parameters ---------------------------------------------------
 
     marge_securite:
       name: "Target grid import (W)"
@@ -78,7 +78,7 @@ blueprint:
           mode: box
 
     zone_neutre:
-      name: "Dead band ± (W)"
+      name: "Dead band +/- (W)"
       description: >
         Tolerance around the target before acting. With 80 W,
         the automation only intervenes if consumption deviates more
@@ -169,7 +169,7 @@ blueprint:
           unit_of_measurement: min
           mode: box
 
-# ─── Automation ──────────────────────────────────────────────────────────────
+# --- Automation --------------------------------------------------------------
 
 mode: single
 max_exceeded: silent
