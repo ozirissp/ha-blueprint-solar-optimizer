@@ -1,0 +1,241 @@
+blueprint:
+  name: "Solar Injection Regulator"
+  description: >
+    Automatically regulates the injection threshold of an inverter (number entity)
+    to keep grid consumption close to a configurable target.
+    Rises cautiously in small steps, drops aggressively to prevent any
+    accidental export. Activation conditions are fully configurable
+    (peak hours, battery level, weather, presence...).
+  domain: automation
+  author: "Arnaud Masciotra"
+  homeassistant:
+    min_version: "2026.3.0"
+
+  input:
+
+    # ─── Sensors ─────────────────────────────────────────────────────────────
+
+    sensor_conso_reseau:
+      name: "Instantaneous grid consumption"
+      description: >
+        Power sensor in watts, signed — positive when importing from the grid,
+        negative when exporting. Can be a raw sensor or a sliding average
+        (platform: statistics).
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+
+    sensor_production:
+      name: "Solar production"
+      description: >
+        Power sensor in watts for your instantaneous solar production.
+        Used only to detect nighttime (production < 10 W) — the automation
+        disables itself automatically when there is no sunlight.
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+
+    number_seuil:
+      name: "Injection threshold to control"
+      description: >
+        The number.xxx entity of your inverter or solar system.
+        This is the only value the automation will modify.
+      selector:
+        entity:
+          domain: number
+
+    # ─── Custom conditions ───────────────────────────────────────────────────
+
+    conditions:
+      name: "Activation conditions"
+      description: >
+        Regulation only starts when all these conditions are simultaneously true.
+        Add whatever you need here: off-peak hours (binary_sensor HC = off),
+        battery threshold, time range, presence, weather...
+        Leave empty = always active whenever there is solar production.
+      default: []
+      selector:
+        condition:
+
+    # ─── Regulation parameters ────────────────────────────────────────────────
+
+    marge_securite:
+      name: "Target grid import (W)"
+      description: >
+        The import value the automation tries to maintain.
+        200 W = always aim to import at least 200 W from the grid,
+        which prevents any accidental export.
+        0 W = aim for perfect balance with no safety margin.
+      default: 200
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    zone_neutre:
+      name: "Dead band ± (W)"
+      description: >
+        Tolerance around the target before acting. With 80 W,
+        the automation only intervenes if consumption deviates more
+        than 80 W from the target. Avoids over-stressing the API
+        for minor fluctuations.
+      default: 80
+      selector:
+        number:
+          min: 10
+          max: 300
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    seuil_min:
+      name: "Minimum injection (W)"
+      description: >
+        Floor value for the inverter. The automation will never go below
+        this threshold, even when consumption is very low.
+        Allows maintaining a base injection at all times.
+      default: 100
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    seuil_max:
+      name: "Maximum injection (W)"
+      description: >
+        Ceiling value for the inverter. Generally corresponds to the
+        max power of your micro-inverter (800 W for the Anker Solix).
+        The automation will never exceed this value.
+      default: 800
+      selector:
+        number:
+          min: 100
+          max: 3000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    pas_montee:
+      name: "Rise step (W / cycle)"
+      description: >
+        How much injection increases each cycle when importing too much
+        compared to the target. Small = slow and stable rise,
+        with no risk of overshooting the target.
+      default: 50
+      selector:
+        number:
+          min: 10
+          max: 300
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    pas_descente:
+      name: "Drop step (W / cycle)"
+      description: >
+        How much injection decreases each cycle when export risk is detected.
+        Large = fast reaction to prevent any export.
+        Can drop to the floor in a single cycle.
+      default: 300
+      selector:
+        number:
+          min: 50
+          max: 800
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+    intervalle_polling:
+      name: "Regulation interval (minutes)"
+      description: >
+        How often the automation reads sensors and adjusts the inverter.
+        10 min is a good balance between API load and responsiveness.
+        Note: the value will be rounded to a divisor of 60 (1, 2, 3, 4, 5,
+        6, 10, 12, 15, 20, 30, 60) to align with the HA clock.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+# ─── Automation ──────────────────────────────────────────────────────────────
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  # Fire every minute and filter in the condition block,
+  # because time_pattern does not support dynamic values from inputs.
+  - platform: time_pattern
+    minutes: "/1"
+
+condition:
+  # Only act on minutes aligned with the configurable interval
+  - condition: template
+    value_template: >
+      {{ now().minute % (intervalle_polling | int(10)) == 0 }}
+  # Skip if solar production is zero (night or heavy overcast)
+  - condition: template
+    value_template: >
+      {{ states(entity_prod) | float(0) > 10 }}
+  # Custom conditions defined by the user in the blueprint form
+  - condition: !input conditions
+
+action:
+  - variables:
+      entity_conso:    !input sensor_conso_reseau
+      entity_seuil:    !input number_seuil
+      entity_prod:     !input sensor_production
+      conso:           "{{ states(entity_conso) | float(0) }}"
+      seuil_actuel:    "{{ states(entity_seuil) | float(0) }}"
+      cible:           "{{ marge_securite | int(200) }}"
+      zn:              "{{ zone_neutre | int(80) }}"
+      mn:              "{{ seuil_min | int(100) }}"
+      mx:              "{{ seuil_max | int(800) }}"
+      ecart:           "{{ states(entity_conso) | float(0) - (marge_securite | int(200)) }}"
+
+  - variables:
+      nouveau_seuil: >
+        {% set s = seuil_actuel %}
+        {% set mn = seuil_min | int(100) %}
+        {% set mx = seuil_max | int(800) %}
+        {% set zn = zone_neutre | int(80) %}
+        {% set ecart = conso - (marge_securite | int(200)) %}
+        {% if ecart > zn %}
+          {{ [s + (pas_montee | int(50)), mx] | min }}
+        {% elif ecart < -zn %}
+          {{ [s - (pas_descente | int(300)), mn] | max }}
+        {% else %}
+          {{ s }}
+        {% endif %}
+
+  # Only call the API if the value actually changes
+  - condition: template
+    value_template: "{{ nouveau_seuil | int != seuil_actuel | int }}"
+
+  - action: number.set_value
+    target:
+      entity_id: !input number_seuil
+    data:
+      value: "{{ nouveau_seuil | int }}"
+
+  # Log entry visible in HA logs (requires logger.default: info or a filter)
+  - action: system_log.write
+    data:
+      level: info
+      message: >
+        [Solar Regulator]
+        Grid={{ conso | round }}W  Target={{ cible }}W
+        Deviation={{ ecart | round }}W
+        Threshold={{ seuil_actuel | round }}W -> {{ nouveau_seuil | round }}W
